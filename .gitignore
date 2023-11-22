@@ -187,3 +187,5 @@ build-*
 
 # LLM models
 *.gguf
+gpt4all-api/gpt4all_api/models/*
+
