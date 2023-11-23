@@ -13,6 +13,8 @@ from gpt4all import GPT4All
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+### This should follow https://github.com/openai/openai-openapi/blob/master/openapi.yaml
+
 # Optimzed base model with JSON encoder for datetime
 class EncoderBaseModel(BaseModel):
     class Config:
@@ -115,7 +117,7 @@ def stream_completion(output: Iterable, base_response: ChatCompletionResponse):
             index=0,
             finish_reason=''
         )]
-        print(f"Chunk: {chunk}")  # Debugging print statement
+        #print(f"Chunk: {chunk}")  # Debugging print statement
         yield chunk.json()  # Convert the ChatCompletionResponse object to a JSON string
 
 
@@ -154,7 +156,7 @@ async def chat_completions(request: ChatCompletionRequest):
         choices = []
         formatted_prompt = format_chat_messages(request.messages)
         # Debug formatted_prompt
-        logger.debug(f"Formatted prompt: {formatted_prompt}")
+        #logger.debug(f"Formatted prompt: {formatted_prompt}")
         if settings.inference_mode == "gpu":
             # Prepare payload for GPU inference
             payload = {"parameters": request.dict()}
@@ -180,10 +182,10 @@ async def chat_completions(request: ChatCompletionRequest):
         else:
             # CPU inference logic
             model = GPT4All(model_name=request.model, model_path=settings.gpt4all_path)
-            print(f"Model: {model}")  # Debugging print statement
+            #print(f"Model: {model}")  # Debugging print statement
             # Debugging formatted_prompt
             formatted_prompt = format_chat_messages(request.messages)
-            print(f"Formatted prompt: {formatted_prompt}")  # Debugging print statement
+            #print(f"Formatted prompt: {formatted_prompt}")  # Debugging print statement
             output = model.generate(
                                     prompt=formatted_prompt,
                                     repeat_penalty=request.frequency_penalty,
@@ -194,7 +196,7 @@ async def chat_completions(request: ChatCompletionRequest):
                                     top_k=request.top_k,                                    
             )
             # Debugging output
-            print(f"Output: {output}")  # Debugging print statementlogger.debug(f"Output: {output}")
+            #print(f"Output: {output}")  # Debugging print statementlogger.debug(f"Output: {output}")
             
             # Stream response logic
             if request.stream:  # Assuming request has a 'stream' attribute to indicate streaming
