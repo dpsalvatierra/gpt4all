@@ -2,6 +2,8 @@
 This directory contains the source code to run and build docker images that run a FastAPI app
 for serving inference from GPT4All models. The API matches the OpenAI API spec.
 
+The GPT4ALL REST API runs on port 4891 and supports CPU and GPU inference. Just add the model and inference mode (CPU/GPU), the model will download automagically in `gpt4all-api/gpt4all_api/models` directory
+
 ## Tutorial
 
 The following tutorial assumes that you have checked out this repo and cd'd into it.
@@ -55,13 +57,12 @@ make test
 
 Once the FastAPI ap is started you can access its documentation and test the search endpoint by going to:
 ```
-localhost:80/docs
+localhost:4891/docs
 ```
 
-This documentation should match the OpenAI OpenAPI spec located at https://github.com/openai/openai-openapi/blob/master/openapi.yaml
-
-
 #### Running inference
+
+##### Completion
 ```python
 import openai
 openai.api_base = "http://localhost:4891/v1"
@@ -70,7 +71,7 @@ openai.api_key = "not needed for a local LLM"
 
 
 def test_completion():
-    model = "gpt4all-j-v1.3-groovy"
+    model = "llama-2-7b-chat.Q4_0"
     prompt = "Who is Michael Jordan?"
     response = openai.Completion.create(
         model=model,
@@ -84,4 +85,47 @@ def test_completion():
     )
     assert len(response['choices'][0]['text']) > len(prompt)
     print(response)
+```
+##### Chat Completion
+```python
+import openai
+
+# Ask user if they want to stream the response or not, y is True, n is False, handle errors
+streaming = input("Do you want to stream the response? (y/n): ")
+
+if streaming == 'y':
+    streaming = True
+elif streaming == 'n':
+    streaming = False
+else:
+    print("Invalid input, please try again")
+    exit()
+
+
+
+# Max output tokens, default is 200
+max_output_tokens = 200
+
+# Modify OpenAI's API key and API base to use LLM's API server.
+openai.api_key = 'Not needed for this LLM' # Please keep this variable empty
+openai.api_base = 'http://127.0.0.1:4891/v1'
+completion = openai.ChatCompletion.create(
+    model="llama-2-7b-chat.Q4_0",
+    max_tokens= max_output_tokens,
+    messages =  [{'role': 'system', 'content': f'You are a helpful assistant who needs to anser in less than {max_output_tokens} tokens'},
+                 {'role': 'assistant', 'content': 'Michael Jordan was a basketball player for the Chicago Bulls'},
+                 {'role': 'user', 'content': 'Who is Michael Jordan?'}],
+    stream=streaming)
+
+
+# Print the response
+if streaming:
+    for chunk in completion:
+        if ('role' in chunk['choices'][0]['delta'] and chunk['choices'][0]['delta']['role'] != None):
+            print(chunk['choices'][0]['delta']['role'] + ': ', end='')
+        else:
+            print(chunk['choices'][0]['delta']['content'], end='')
+else:
+    print(completion['choices'][0]['message']['role'] + ': ' + completion['choices'][0]['message']['content'])
+
 ```
