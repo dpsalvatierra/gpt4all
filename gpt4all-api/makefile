@@ -3,7 +3,7 @@ APP_NAME:=gpt4all_api
 PYTHON:=python3.11
 SHELL := /bin/bash
 
-.PHONY: all fresh testenv testenv_gpu testenv_d test test_build clean_testenv fresh_testenv venv dependencies clean black isort
+.PHONY: all fresh testenv testenv_d test test_build clean_testenv fresh_testenv venv dependencies clean black isort
 
 all: dependencies
 
@@ -13,15 +13,9 @@ delete_images:
 	@if [ -n "$(shell docker images -q $(APP_NAME))" ]; then \
 		docker rmi $(APP_NAME); \
 	fi
-	@if [ -n "$(shell docker images -q gpt4all_gpu)" ]; then \
-		docker rmi gpt4all_gpu; \
-	fi
 
 testenv: clean_testenv test_build
 	docker-compose -f docker-compose.yaml up --build
-
-testenv_gpu: clean_testenv test_build
-	docker-compose -f docker-compose.yaml -f docker-compose.gpu.yaml up --build
 
 testenv_d: clean_testenv test_build
 	docker-compose up --build -d
@@ -35,9 +29,6 @@ test_build:
 clean_testenv:
 	docker-compose down -v
 
-clean_testenv_gpu:
-	docker-compose -f docker-compose.yaml -f docker-compose.gpu.yaml down -v
-
 fresh_testenv: clean_testenv testenv
 
 venv:
@@ -46,7 +37,7 @@ venv:
 dependencies: venv
 	. $(ROOT_DIR)/venv/bin/activate; $(PYTHON) -m pip install -r $(ROOT_DIR)/$(APP_NAME)/requirements.txt
 
-clean: clean_testenv delete_images clean_testenv_gpu
+clean: clean_testenv delete_images
 	# Remove existing environment
 	sudo find . -type d -name "__pycache__" -exec rm -rf {} +
 	sudo rm -rf $(ROOT_DIR)/venv
