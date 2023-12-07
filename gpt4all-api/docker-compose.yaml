@@ -15,8 +15,18 @@ services:
       - LOGLEVEL=debug
       - PORT=4891
       - model=${MODEL_BIN} # using variable from .env file
-      - inference_mode=cpu
+      - inference_mode=${INFERENCE_MODE}
+      - LD_LIBRARY_PATH=/usr/local/lib/python3.10/dist-packages/torch/lib
+      - IS_DOCKER=1
     volumes:
       - './gpt4all_api/app:/app'
       - './gpt4all_api/models:/models' # models are mounted in the container
     command: ["/start-reload.sh"]
+    shm_size: 2g
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

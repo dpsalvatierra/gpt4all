@@ -1,8 +1,34 @@
-# syntax=docker/dockerfile:1.0.0-experimental
-FROM tiangolo/uvicorn-gunicorn:python3.11
+FROM dsalvat1/cudagl:12.3.1-runtime-ubuntu22.04
+
+# Cuda env vars
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME /usr/local/cuda
+ENV PATH $PATH:$CUDA_HOME/bin
+ENV LD_LIBRARY_PATH $LD_LIBRARY_PATH:$CUDA_HOME/lib64
+
+RUN apt-get update && apt-get install -y software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && add-apt-repository ppa:ubuntu-toolchain-r/test \
+    && add-apt-repository universe \
+    && apt-get update \
+    && apt-get upgrade -y \
+    && apt-get install -y \ 
+    git python3.10 python3.10-minimal python3.10-dev python3.10-distutils python3-pip \
+    mesa-vulkan-drivers libvulkan1 libvulkan-dev vulkan-tools libxext6
+RUN apt autoremove -y
+
+RUN apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Set Python 3.10 as the default Python version
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 \
+    && update-alternatives --install /usr/bin/pip3 pip /usr/bin/pip 1
 
 # Put first so anytime this file changes other cached layers are invalidated.
 COPY gpt4all_api/requirements.txt /requirements.txt
+COPY gpt4all_api/start.sh /start.sh
+COPY gpt4all_api/start-reload.sh /start-reload.sh
+RUN chmod +x /start.sh && chmod +x /start-reload.sh
+COPY gpt4all_api/gunicorn_conf.py /gunicorn_conf.py
 
 RUN pip install --upgrade pip
 
@@ -10,8 +36,17 @@ RUN pip install --upgrade pip
 RUN --mount=type=ssh pip install -r /requirements.txt && \
   rm -Rf /root/.cache && rm -Rf /tmp/pip-install*
 
+
+# Copy nvidia json file to make sure we can use the GPU.
+COPY gpt4all_api/10_nvidia.json /etc/vulkan/icd.d/
+
 # Finally, copy app and client.
 COPY gpt4all_api/app /app
 
+WORKDIR /app/
+
 RUN mkdir -p /models
 
+ENV PYTHONPATH=/app
+
+CMD ["/start.sh"]

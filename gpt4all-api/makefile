@@ -1,6 +1,6 @@
 ROOT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 APP_NAME:=gpt4all_api
-PYTHON:=python3.8
+PYTHON:=python3.11
 SHELL := /bin/bash
 
 .PHONY: all fresh testenv testenv_gpu testenv_d test test_build clean_testenv fresh_testenv venv dependencies clean black isort

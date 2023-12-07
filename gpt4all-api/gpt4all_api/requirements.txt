@@ -6,8 +6,19 @@ ujson>=2.0.2
 fastapi>=0.95.0
 Jinja2>=3.0
 gpt4all>=1.0.0
+openai==0.28.1
+python-dotenv
+uvicorn[standard]==0.21.0
+gunicorn==20.1.0
+
+# PyTorch with CUDA 11.8 support (replace with the correct version from PyTorch website)
+torch==2.1.1
+torchvision==0.16.1
+
+# TensorFlow with CUDA 11.8 support (if required)
+tensorflow==2.13.1
+
+# Development dependencies
 pytest
-openai==0.28.0
 black
 isort
-python-dotenv

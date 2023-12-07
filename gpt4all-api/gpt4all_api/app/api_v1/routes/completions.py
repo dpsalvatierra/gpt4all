@@ -1,28 +1,22 @@
 import json
-from typing import List, Dict, Iterable, AsyncIterable
 import logging
 import time
-from typing import Dict, List, Union, Optional
+from typing import List, Dict, Union, Optional, Iterable
 from uuid import uuid4
-import aiohttp
-import asyncio
-from api_v1.settings import settings
-from fastapi import APIRouter, Depends, Response, Security, status, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from gpt4all import GPT4All
 from pydantic import BaseModel, Field
+from api_v1.settings import settings
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-
-### This should follow https://github.com/openai/openai-openapi/blob/master/openapi.yaml
-
-
+# Class definitions
 class CompletionRequest(BaseModel):
     model: str = Field(settings.model, description='The model to generate a completion from.')
     prompt: Union[List[str], str] = Field(..., description='The prompt to begin completing from.')
-    max_tokens: int = Field(None, description='Max tokens to generate')
+    max_tokens: int = Field(settings.max_tokens, description='Max tokens to generate')
     temperature: float = Field(settings.temp, description='Model temperature')
     top_p: Optional[float] = Field(settings.top_p, description='top_p')
     top_k: Optional[int] = Field(settings.top_k, description='top_k')
@@ -30,19 +24,16 @@ class CompletionRequest(BaseModel):
     stream: bool = Field(False, description='Stream responses')
     repeat_penalty: float = Field(settings.repeat_penalty, description='Repeat penalty')
 
-
 class CompletionChoice(BaseModel):
     text: str
     index: int
     logprobs: float
     finish_reason: str
 
-
 class CompletionUsage(BaseModel):
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
-
 
 class CompletionResponse(BaseModel):
     id: str
@@ -52,7 +43,6 @@ class CompletionResponse(BaseModel):
     choices: List[CompletionChoice]
     usage: CompletionUsage
 
-
 class CompletionStreamResponse(BaseModel):
     id: str
     object: str = 'text_completion'
@@ -60,156 +50,70 @@ class CompletionStreamResponse(BaseModel):
     model: str
     choices: List[CompletionChoice]
 
-
+# Router and Endpoints
 router = APIRouter(prefix="/completions", tags=["Completion Endpoints"])
 
 def stream_completion(output: Iterable, base_response: CompletionStreamResponse):
     """
     Streams a GPT4All output to the client.
-
-    Args:
-        output: The output of GPT4All.generate(), which is an iterable of tokens.
-        base_response: The base response object, which is cloned and modified for each token.
-
-    Returns:
-        A Generator of CompletionStreamResponse objects, which are serialized to JSON Event Stream format.
     """
     for token in output:
         chunk = base_response.copy()
-        chunk.choices = [dict(CompletionChoice(
+        chunk.choices = [CompletionChoice(
             text=token,
             index=0,
             logprobs=-1,
             finish_reason=''
-        ))]
-        yield f"data: {json.dumps(dict(chunk))}\n\n"
-
-async def gpu_infer(payload, header):
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(
-                settings.hf_inference_server_host, headers=header, data=json.dumps(payload)
-            ) as response:
-                resp = await response.json()
-            return resp
-
-        except aiohttp.ClientError as e:
-            # Handle client-side errors (e.g., connection error, invalid URL)
-            logger.error(f"Client error: {e}")
-        except aiohttp.ServerError as e:
-            # Handle server-side errors (e.g., internal server error)
-            logger.error(f"Server error: {e}")
-        except json.JSONDecodeError as e:
-            # Handle JSON decoding errors
-            logger.error(f"JSON decoding error: {e}")
-        except Exception as e:
-            # Handle other unexpected exceptions
-            logger.error(f"Unexpected error: {e}")
+        )]
+        yield f"data: {json.dumps(chunk.dict())}\n\n"
 
 @router.post("/", response_model=CompletionResponse)
 async def completions(request: CompletionRequest):
     '''
     Completes a GPT4All model response.
     '''
-    if settings.inference_mode == "gpu":
-        params = request.dict(exclude={'model', 'prompt', 'max_tokens', 'n'})
-        params["max_new_tokens"] = request.max_tokens
-        params["num_return_sequences"] = request.n
-
-        header = {"Content-Type": "application/json"}
-        if isinstance(request.prompt, list):
-            tasks = []
-            for prompt in request.prompt:
-                payload = {"parameters": params}
-                payload["inputs"] = prompt
-                task = gpu_infer(payload, header)
-                tasks.append(task)
-            results = await asyncio.gather(*tasks)
-
-            choices = []
-            for response in results:
-                scores = response["scores"] if "scores" in response else -1.0
-                choices.append(
-                    dict(
-                        CompletionChoice(
-                            text=response["generated_text"], index=0, logprobs=scores, finish_reason='stop'
-                        )
-                    )
-                )
-
-            return CompletionResponse(
-                id=str(uuid4()),
-                created=time.time(),
-                model=request.model,
-                choices=choices,
-                usage={'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0},
-            )
-
+    if isinstance(request.prompt, list):
+        if len(request.prompt) > 1:
+            raise HTTPException(status_code=400, detail="Can only process one prompt per request.")
         else:
-            payload = {"parameters": params}
-            # If streaming, we need to return a StreamingResponse
-            payload["inputs"] = request.prompt
+            request.prompt = request.prompt[0]
 
-            resp = await gpu_infer(payload, header)
+    # Adding inference_mode to the model
+    model = GPT4All(model_name=request.model, model_path=settings.gpt4all_path, device=settings.inference_mode)
 
-            output = resp["generated_text"]
-            # this returns all logprobs
-            scores = resp["scores"] if "scores" in resp else -1.0
+    output = model.generate(
+        prompt=request.prompt or '',
+        max_tokens=request.max_tokens or 500,
+        temp=request.temperature or 0.7,
+        top_k=request.top_k or 50,
+        top_p=request.top_p or 0.9,
+        streaming=request.stream
+    )
 
-            return CompletionResponse(
-                id=str(uuid4()),
-                created=time.time(),
-                model=request.model,
-                choices=[dict(CompletionChoice(text=output, index=0, logprobs=scores, finish_reason='stop'))],
-                usage={'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0},
-            )
-
+    if request.stream:
+        base_chunk = CompletionStreamResponse(
+            id=str(uuid4()),
+            created=int(time.time()),
+            model=request.model,
+            choices=[]
+        )
+        return StreamingResponse(stream_completion(output, base_chunk),
+                                 media_type="text/event-stream")
     else:
-
-        if request.model != settings.model:
-            raise HTTPException(status_code=400,
-                                detail=f"The GPT4All inference server is booted to only infer: `{settings.model}`")
-
-        if isinstance(request.prompt, list):
-            if len(request.prompt) > 1:
-                raise HTTPException(status_code=400, detail="Can only infer one inference per request in CPU mode.")
-            else:
-                request.prompt = request.prompt[0]
-
-        model = GPT4All(model_name=settings.model, model_path=settings.gpt4all_path)
-
-        output = model.generate(prompt=request.prompt,
-                                max_tokens=request.max_tokens,
-                                streaming=request.stream,
-                                top_k=request.top_k,
-                                top_p=request.top_p,
-                                temp=request.temperature,
-                                )
-
-        # If streaming, we need to return a StreamingResponse
-        if request.stream:
-            base_chunk = CompletionStreamResponse(
-                id=str(uuid4()),
-                created=time.time(),
-                model=request.model,
-                choices=[]
+        return CompletionResponse(
+            id=str(uuid4()),
+            created=int(time.time()),
+            model=request.model,
+            choices=[CompletionChoice(
+                text=output,
+                index=0,
+                logprobs=-1,
+                finish_reason='stop'
+            )],
+            usage=CompletionUsage(
+                prompt_tokens=0,  # You may need to calculate these values
+                completion_tokens=0,
+                total_tokens=0
             )
-            return StreamingResponse((response for response in stream_completion(output, base_chunk)),
-                                     media_type="text/event-stream")
-        else:
-            return CompletionResponse(
-                id=str(uuid4()),
-                created=time.time(),
-                model=request.model,
-                choices=[dict(CompletionChoice(
-                    text=output,
-                    index=0,
-                    logprobs=-1,
-                    finish_reason='stop'
-                ))],
-                usage={
-                    'prompt_tokens': 0,  # TODO how to compute this?
-                    'completion_tokens': 0,
-                    'total_tokens': 0
-                }
-            )
+        )
+
