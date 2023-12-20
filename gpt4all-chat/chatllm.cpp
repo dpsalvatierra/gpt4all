@@ -248,14 +248,16 @@ bool ChatLLM::loadModel(const ModelInfo &modelInfo)
             m_llModelInfo.model = model;
         } else {
 
+            // TODO: make configurable in UI
+            auto n_ctx = MySettings::globalInstance()->modelContextLength(modelInfo);
+            m_ctx.n_ctx = n_ctx;
+
+            std::string buildVariant = "auto";
 #if defined(Q_OS_MAC) && defined(__arm__)
             if (m_forceMetal)
-                m_llModelInfo.model = LLMImplementation::construct(filePath.toStdString(), "metal");
-            else
-                m_llModelInfo.model = LLMImplementation::construct(filePath.toStdString(), "auto");
-#else
-            m_llModelInfo.model = LLModel::Implementation::construct(filePath.toStdString(), "auto");
+                buildVariant = "metal";
 #endif
+            m_llModelInfo.model = LLModel::Implementation::construct(filePath.toStdString(), buildVariant, n_ctx);
 
             if (m_llModelInfo.model) {
                 // Update the settings that a model is being loaded and update the device list
@@ -267,7 +269,7 @@ bool ChatLLM::loadModel(const ModelInfo &modelInfo)
                 if (requestedDevice == "CPU") {
                     emit reportFallbackReason(""); // fallback not applicable
                 } else {
-                    const size_t requiredMemory = m_llModelInfo.model->requiredMem(filePath.toStdString());
+                    const size_t requiredMemory = m_llModelInfo.model->requiredMem(filePath.toStdString(), n_ctx);
                     std::vector<LLModel::GPUDevice> availableDevices = m_llModelInfo.model->availableGPUDevices(requiredMemory);
                     LLModel::GPUDevice *device = nullptr;
 
@@ -296,14 +298,14 @@ bool ChatLLM::loadModel(const ModelInfo &modelInfo)
                 // Report which device we're actually using
                 emit reportDevice(actualDevice);
 
-                bool success = m_llModelInfo.model->loadModel(filePath.toStdString());
+                bool success = m_llModelInfo.model->loadModel(filePath.toStdString(), n_ctx);
                 if (actualDevice == "CPU") {
                     // we asked llama.cpp to use the CPU
                 } else if (!success) {
                     // llama_init_from_file returned nullptr
                     emit reportDevice("CPU");
                     emit reportFallbackReason("<br>GPU loading failed (out of VRAM?)");
-                    success = m_llModelInfo.model->loadModel(filePath.toStdString());
+                    success = m_llModelInfo.model->loadModel(filePath.toStdString(), n_ctx);
                 } else if (!m_llModelInfo.model->usingGPUDevice()) {
                     // ggml_vk_init was not called in llama.cpp
                     // We might have had to fallback to CPU after load if the model is not possible to accelerate
@@ -763,6 +765,8 @@ bool ChatLLM::handleRestoreStateFromTextRecalculate(bool isRecalc)
     return false;
 }
 
+// this function serialized the cached model state to disk.
+// we want to also serialize n_ctx, and read it at load time.
 bool ChatLLM::serialize(QDataStream &stream, int version, bool serializeKV)
 {
     if (version > 1) {
@@ -790,6 +794,9 @@ bool ChatLLM::serialize(QDataStream &stream, int version, bool serializeKV)
         stream << responseLogits;
     }
     stream << m_ctx.n_past;
+    if (version >= 6) {
+        stream << m_ctx.n_ctx;
+    }
     stream << quint64(m_ctx.logits.size());
     stream.writeRawData(reinterpret_cast<const char*>(m_ctx.logits.data()), m_ctx.logits.size() * sizeof(float));
     stream << quint64(m_ctx.tokens.size());
@@ -839,6 +846,12 @@ bool ChatLLM::deserialize(QDataStream &stream, int version, bool deserializeKV, 
     stream >> n_past;
     if (!discardKV) m_ctx.n_past = n_past;
 
+    if (version >= 6) {
+        uint32_t n_ctx;
+        stream >> n_ctx;
+        if (!discardKV) m_ctx.n_ctx = n_ctx;
+    }
+
     quint64 logitsSize;
     stream >> logitsSize;
     if (!discardKV) {
@@ -863,11 +876,11 @@ bool ChatLLM::deserialize(QDataStream &stream, int version, bool deserializeKV, 
         if (!discardKV)
             m_state = qUncompress(compressed);
     } else {
-        if (!discardKV)
+        if (!discardKV) {
             stream >> m_state;
-        else {
+        } else {
             QByteArray state;
-            stream >> m_state;
+            stream >> state;
         }
     }
 
@@ -912,7 +925,7 @@ void ChatLLM::restoreState()
         stream >> context;
         chatGPT->setContext(context);
         m_state.clear();
-        m_state.resize(0);
+        m_state.squeeze();
         return;
     }
 
@@ -923,10 +936,16 @@ void ChatLLM::restoreState()
     if (m_state.isEmpty())
         return;
 
-    m_processedSystemPrompt = true;
-    m_llModelInfo.model->restoreState(static_cast<const uint8_t*>(reinterpret_cast<void*>(m_state.data())));
+    if (m_llModelInfo.model->stateSize() == m_state.size()) {
+        m_llModelInfo.model->restoreState(static_cast<const uint8_t*>(reinterpret_cast<void*>(m_state.data())));
+        m_processedSystemPrompt = true;
+    } else {
+        qWarning() << "restoring state from text because" << m_llModelInfo.model->stateSize() << "!=" << m_state.size() << "\n";
+        m_restoreStateFromText = true;
+    }
+
     m_state.clear();
-    m_state.resize(0);
+    m_state.squeeze();
 }
 
 void ChatLLM::processSystemPrompt()
